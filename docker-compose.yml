@@ -1,0 +1,73 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: litevlm-redis
+    restart: unless-stopped
+
+  model-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: litevlm-model-api
+    restart: unless-stopped
+    environment:
+      DEFAULT_MODEL_ALIAS: ${DEFAULT_MODEL_ALIAS:-smolvlm-256m}
+      SMOLVLM_MODEL_ID: ${SMOLVLM_MODEL_ID:-HuggingFaceTB/SmolVLM-256M-Instruct}
+      QWEN_MODEL_ID: ${QWEN_MODEL_ID:-Qwen/Qwen2.5-1.5B-Instruct}
+      HF_TOKEN: ${HF_TOKEN}
+      SINGLE_ACTIVE_MODEL: ${SINGLE_ACTIVE_MODEL:-false}
+      MODEL_IDLE_UNLOAD_SECONDS: ${MODEL_IDLE_UNLOAD_SECONDS:-3600}
+      MODEL_CLEANUP_INTERVAL_SECONDS: ${MODEL_CLEANUP_INTERVAL_SECONDS:-60}
+      DEVICE: ${DEVICE:-cpu}
+      DEFAULT_MAX_NEW_TOKENS: ${DEFAULT_MAX_NEW_TOKENS:-64}
+      MAX_NEW_TOKENS_LIMIT: ${MAX_NEW_TOKENS_LIMIT:-256}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  queue-api:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: litevlm-queue-api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.queue-api.rule=PathPrefix(`/`)"
+      - "traefik.http.services.queue-api.loadbalancer.server.port=8000"
+    environment:
+      PORT: ${PORT:-8000}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      QUEUE_NAME: ${QUEUE_NAME:-litevlm_requests}
+      MODEL_API_BASE_URL: ${MODEL_API_BASE_URL:-http://model-api:8000}
+      MAX_REQUESTS_PER_MINUTE: ${MAX_REQUESTS_PER_MINUTE:-10}
+      JOB_TIMEOUT_MS: ${JOB_TIMEOUT_MS:-300000}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      UPLOAD_LIMIT_MB: ${UPLOAD_LIMIT_MB:-10}
+      JSON_BODY_LIMIT_MB: ${JSON_BODY_LIMIT_MB:-25}
+      AUTH_TOKENS_FILE: ${AUTH_TOKENS_FILE:-/app/auth-tokens.json}
+    volumes:
+      - ./gateway/auth-tokens.json:/app/auth-tokens.json:ro
+    depends_on:
+      - redis
+      - model-api
+
+  queue-worker:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: litevlm-queue-worker
+    restart: unless-stopped
+    command: ["node", "src/worker.js"]
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      QUEUE_NAME: ${QUEUE_NAME:-litevlm_requests}
+      MODEL_API_BASE_URL: ${MODEL_API_BASE_URL:-http://model-api:8000}
+      MAX_REQUESTS_PER_MINUTE: ${MAX_REQUESTS_PER_MINUTE:-10}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      WORKER_LOCK_DURATION_MS: ${WORKER_LOCK_DURATION_MS:-300000}
+      WORKER_STALLED_INTERVAL_MS: ${WORKER_STALLED_INTERVAL_MS:-30000}
+      WORKER_MAX_STALLED_COUNT: ${WORKER_MAX_STALLED_COUNT:-1}
+    depends_on:
+      - redis
+      - model-api
