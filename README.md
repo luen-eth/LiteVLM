@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.png" alt="LiteVLM Banner" width="100%">
+</p>
+
 # LiteVLM Queue API
 
 A production-style image and chat inference stack with:
@@ -16,6 +20,14 @@ The stack is built for burst traffic. The API accepts requests immediately, then
 - `model-api` (`litevlm-model-api`): Python inference service (SmolVLM + Qwen), lazy model loading.
 - `redis` (`litevlm-redis`): Queue state, locks, events.
 
+```mermaid
+graph LR
+    Client([Client]) -->|HTTP POST| API[queue-api]
+    API -->|BullMQ| Redis[(Redis)]
+    Worker[queue-worker] -->|BullMQ| Redis
+    Worker -->|HTTP POST| Model[model-api]
+```
+
 ## Request Flow
 
 1. Client sends request to `queue-api`.
@@ -24,6 +36,29 @@ The stack is built for burst traffic. The API accepts requests immediately, then
 4. `queue-worker` picks jobs in FIFO order with rate limiting.
 5. Worker calls `model-api` and returns response.
 6. `queue-api` waits for completion (up to `JOB_TIMEOUT_MS`) and returns result.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant QueueAPI as queue-api
+    participant Redis as redis
+    participant Worker as queue-worker
+    participant ModelAPI as model-api
+
+    Client->>QueueAPI: POST /generate
+    QueueAPI->>Redis: Enqueue Job
+    QueueAPI-->>Client: (Waits for result)
+    
+    Worker->>Redis: Poll for Jobs
+    Redis-->>Worker: Job payload
+    
+    Worker->>ModelAPI: POST /generate
+    ModelAPI-->>Worker: Model Inference Result
+    
+    Worker->>Redis: Mark Job Completed
+    Redis-->>QueueAPI: Job Completion Event
+    QueueAPI-->>Client: Return HTTP 200 with Result
+```
 
 ## Supported Models
 
